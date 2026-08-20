@@ -1,4 +1,4 @@
-"""
+""" 
 Painel de Evasão · SENAI-AL — MVP (Streamlit)
 Lê a saída escorada do modelo V15.2 (aba SCORE_ALUNOS: score + faixa + prioridade +
 as 20 variáveis por aluno × referência) e apresenta uma visão executiva e uma
@@ -326,7 +326,7 @@ top20_only = st.sidebar.checkbox("Somente Top 20%")
 st.markdown(f"""
 <div class="rv-hdr">
   <div style="width:34px;height:34px;border-radius:8px;background:#ffffff1a;display:flex;align-items:center;justify-content:center;font-size:18px;">🎓</div>
-  <div><h1>Radar de Evasão · SENAI-AL</h1><p>Modelo V15.2 · HistGradientBoosting · score 0–100</p></div>
+  <div><h1> Painel  de Evasão · SENAI-AL</h1><p>Modelo V15.2 · HistGradientBoosting · score 0–100</p></div>
 </div>
 """, unsafe_allow_html=True)
 if "sintétic" in source:

@@ -1,14 +1,16 @@
 """
 Radar de Evasão · SENAI-AL — MVP (Streamlit)
-Lê a saída já escorada do modelo V15.2 (tabela wide + tabela long de detalhe)
-e apresenta uma visão executiva e uma operacional com drill-down por indicador.
+Lê a saída escorada do modelo V15.2 (aba SCORE_ALUNOS: score + faixa + prioridade +
+as 20 variáveis por aluno × referência) e apresenta uma visão executiva e uma
+operacional com drill-down por indicador → variável.
 
 Fonte dos dados (nesta ordem):
   1) arquivo enviado na barra lateral;
-  2) 'score_evasao_v15_powerbi.xlsx' na mesma pasta do app;
-  3) dados sintéticos (para demonstração), caso nenhum arquivo seja encontrado.
+  2) 'score_evasao_v15_powerbi.xlsx' (ou 'dados/score_evasao_v15_powerbi.xlsx');
+  3) dados sintéticos (demonstração), caso nada seja encontrado.
 """
 
+import io
 import unicodedata
 import numpy as np
 import pandas as pd
@@ -23,8 +25,7 @@ FAIXA_ORDER = ["Muito baixo", "Baixo", "Médio", "Alto", "Muito alto"]
 FAIXA_COLOR = {"Muito baixo": "#2E7D45", "Baixo": "#6FA84F", "Médio": "#C98A00",
                "Alto": "#E8720C", "Muito alto": "#C4342B"}
 STATUS_COLOR = {"OK": "#2E7D45", "Atenção": "#C98A00", "Crítico": "#C4342B"}
-STATUS_LEVEL = {"OK": 22, "Atenção": 58, "Crítico": 86}
-DEFAULT_FILE = "score_evasao_v15_powerbi.xlsx"
+DEFAULT_FILES = ["score_evasao_v15_powerbi.xlsx", "dados/score_evasao_v15_powerbi.xlsx"]
 
 # ------------------------------------------------------------------ schema V15.2
 INDICATORS = [
@@ -66,15 +67,14 @@ ACAO = {
 
 # ------------------------------------------------------------------ helpers
 def _norm(s):
-    s = str(s).strip()
-    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+    s = "".join(c for c in unicodedata.normalize("NFKD", str(s).strip()) if not unicodedata.combining(c))
     return s.upper().replace(" ", "").replace("-", "").replace("_", "")
 
-def find_col(df, *candidates):
-    norm_map = {_norm(c): c for c in df.columns}
-    for cand in candidates:
-        if _norm(cand) in norm_map:
-            return norm_map[_norm(cand)]
+def find_col(df, *cands):
+    m = {_norm(c): c for c in df.columns}
+    for c in cands:
+        if _norm(c) in m:
+            return m[_norm(c)]
     return None
 
 def faixa_from_score(s):
@@ -93,6 +93,14 @@ def norm_faixa(v):
     if "MEDIO" in n: return "Médio"
     if "BAIXO" in n: return "Baixo"
     return "Médio"
+
+def norm_prioridade(v):
+    n = _norm(v)
+    if "CRIT" in n: return "Prioridade crítica"
+    if "ALTA" in n: return "Prioridade alta"
+    if "MEDIA" in n: return "Acompanhamento"
+    if "MONITOR" in n: return "Monitoramento"
+    return str(v).replace("_", " ").capitalize()
 
 def norm_status(v):
     n = _norm(v)
@@ -117,153 +125,183 @@ def fmt_value(fmt, v):
         if fmt == "int": return f"{int(round(float(v)))}"
         if fmt == "intDelta": return ("+" if v >= 0 else "") + f"{int(round(float(v)))}"
         if fmt == "flag": return "Sim" if float(v) >= 0.5 else "Não"
-        if fmt == "pct": return f"{int(round(float(v)))}%"
-        if fmt == "ppDelta": return ("+" if v >= 0 else "") + f"{int(round(float(v)))} pp"
+        if fmt == "pct": return f"{float(v):.0f}%"
+        if fmt == "ppDelta": return ("+" if v >= 0 else "") + f"{float(v):.0f} pp"
     except (ValueError, TypeError):
         return str(v)
     return str(v)
 
-# ------------------------------------------------------------------ synthetic data (fallback)
-def raw_value(fmt, rv, rng):
-    if fmt == "media": return round(9.4 - rv * 6.6 + (rng.random() - .5) * .4, 1)
-    if fmt == "meses": return int(round(3 + (1 - rv) * 44 + (rng.random() - .5) * 4))
+# ------------------------------------------------------------------ synthetic fallback
+def _raw(fmt, rv, rng):
+    if fmt == "media": return round(9.4 - rv * 6.6, 1)
+    if fmt == "meses": return int(round(3 + (1 - rv) * 44))
     if fmt == "brl": return int(round((120 + rv * 950) / 10) * 10)
     if fmt == "brlDelta": return int(round(((rv - .4) * 700) / 10) * 10)
     if fmt == "dias": return max(0, int(round(rv * 115)))
-    if fmt == "int": return max(0, int(round(rv * 7 + (rng.random() - .5))))
+    if fmt == "int": return max(0, int(round(rv * 7)))
     if fmt == "intDelta": return int(round((rv - .4) * 4))
     if fmt == "flag": return 1 if rv > .55 else 0
     if fmt == "pct": return int(round(min(100, max(30, 97 - rv * 58))))
     if fmt == "ppDelta": return int(round((.25 - rv) * 22))
     return int(round(rv * 5))
 
-@st.cache_data
 def make_synthetic(n=176, seed=20250820):
     rng = np.random.default_rng(seed)
     wsum = sum(i["peso"] for i in INDICATORS)
-    wide_rows, long_rows = [], []
+    rows = []
     for i in range(n):
         base = rng.random() ** 1.7
         risco = {ind["key"]: float(np.clip(base + (rng.random() - .5) * .85, 0, 1)) for ind in INDICATORS}
         if rng.random() < .18:
-            k = INDICATORS[rng.integers(len(INDICATORS))]["key"]
-            risco[k] = float(np.clip(.72 + rng.random() * .25, 0, 1))
-        score = float(np.clip(sum(ind["peso"] / wsum * risco[ind["key"]] for ind in INDICATORS) * 100
-                              + (rng.random() - .5) * 6, 1, 99))
+            risco[INDICATORS[rng.integers(len(INDICATORS))]["key"]] = float(np.clip(.72 + rng.random() * .25, 0, 1))
+        score = float(np.clip(sum(ind["peso"] / wsum * risco[ind["key"]] for ind in INDICATORS) * 100 + (rng.random() - .5) * 6, 1, 99))
         faixa = faixa_from_score(score)
-        ra = int(20250000 + rng.integers(90000) + i)
-        worst = max(INDICATORS, key=lambda ind: risco[ind["key"]])
-        row = dict(cd_ra=ra, dt_referencia="30/11/2025", SCORE_EVASAO=round(score, 1),
-                   PROBABILIDADE_RISCO=round(score / 100, 3), FAIXA_RISCO=faixa,
-                   PRIORIDADE=prioridade_from_faixa(faixa), ACAO_RECOMENDADA=ACAO[worst["key"]])
+        row = dict(cd_ra=int(20250000 + rng.integers(90000) + i), dt_referencia=pd.Timestamp("2025-11-30"),
+                   SCORE_EVASAO=round(score, 1), PROBABILIDADE_RISCO=round(score / 100, 3),
+                   FAIXA_RISCO=faixa, PRIORIDADE=prioridade_from_faixa(faixa))
         for ind in INDICATORS:
-            row[ind["status_col"]] = status_from_risk(risco[ind["key"]])
             for idx, vr in enumerate(ind["vars"]):
-                tight = .12 if idx == 0 else .34
-                rv = float(np.clip(risco[ind["key"]] + (rng.random() - .5) * tight, 0, 1))
-                val = raw_value(vr["fmt"], rv, rng)
-                row[vr["campo"]] = val
-                long_rows.append(dict(cd_ra=ra, DIMENSAO=ind["nome"], VARIAVEL=vr["campo"],
-                                      LABEL=vr["label"], VALOR=val, PESO=vr["peso"]))
-        wide_rows.append(row)
-    dw = pd.DataFrame(wide_rows).sort_values("SCORE_EVASAO", ascending=False).reset_index(drop=True)
-    return dw, pd.DataFrame(long_rows)
+                rv = float(np.clip(risco[ind["key"]] + (rng.random() - .5) * (.12 if idx == 0 else .34), 0, 1))
+                row[vr["campo"]] = _raw(vr["fmt"], rv, rng)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+# ------------------------------------------------------------------ enrichment
+def derive_indicator_risk(df):
+    """Leitura populacional de cada dimensão a partir das 20 variáveis (0..1 = maior risco)."""
+    def pct(col):
+        return df[col].rank(pct=True) if col in df.columns else pd.Series(0.5, index=df.index)
+    risk = {}
+    risk["desempenho"] = 1 - pct("nr_mediaglobal")
+    risk["permanencia"] = 1 - pct("nr_mesesdecasa")
+    fin = pd.concat([pct("vl_dividamediaparcela"), pct("vl_totalaberto"), pct("nr_maxdiasatraso")], axis=1).max(axis=1)
+    if "fl_inadimplente" in df.columns:
+        fin = fin.where(df["fl_inadimplente"] < 1, fin.clip(lower=0.70))
+    risk["financeiro"] = fin
+    bol = 1 - pct("vl_bolsa")
+    if "fl_tembolsa" in df.columns:
+        bol = bol.where(df["fl_tembolsa"] >= 1, bol.clip(lower=0.60))
+    risk["bolsa"] = bol
+    fre = 1 - pct("nr_freqglobal")
+    if "fl_freqcritica" in df.columns:
+        fre = fre.where(df["fl_freqcritica"] < 1, fre.clip(lower=0.75))
+    risk["frequencia"] = fre
+    risk["comportamento"] = pd.concat([pct("qt_ocorrenciasacum"), pct("qt_ocorrenciasult3m")], axis=1).max(axis=1)
+    return {k: v.clip(0, 1) for k, v in risk.items()}
+
+def enrich(df):
+    has_features = any(v["campo"] in df.columns for ind in INDICATORS for v in ind["vars"])
+    if has_features:
+        risk = derive_indicator_risk(df)
+        for ind in INDICATORS:
+            df["RISK_" + ind["key"]] = risk[ind["key"]].values
+            if ind["status_col"] not in df.columns or df[ind["status_col"]].isna().all():
+                df[ind["status_col"]] = risk[ind["key"]].map(status_from_risk).values
+        df["_worst_key"] = pd.DataFrame({ind["key"]: risk[ind["key"]] for ind in INDICATORS}).idxmax(axis=1).values
+    else:
+        for ind in INDICATORS:
+            df["RISK_" + ind["key"]] = df.get(ind["status_col"], pd.Series("Atenção", index=df.index)).map(
+                lambda s: {"OK": .22, "Atenção": .58, "Crítico": .86}.get(norm_status(s), .58)).values
+        df["_worst_key"] = "financeiro"
+    return df
 
 # ------------------------------------------------------------------ loader
 def normalize_wide(df):
-    """Map an arbitrary scored table to the standard column names used by the app."""
-    out = pd.DataFrame()
     c_ra = find_col(df, "cd_ra", "ra", "matricula")
     c_score = find_col(df, "SCORE_EVASAO", "score", "score_risco")
     if c_ra is None or c_score is None:
         return None
+    out = pd.DataFrame()
     out["cd_ra"] = df[c_ra]
     out["SCORE_EVASAO"] = pd.to_numeric(df[c_score], errors="coerce")
     c_ref = find_col(df, "dt_referencia", "referencia", "data_ref")
-    out["dt_referencia"] = df[c_ref] if c_ref else ""
+    out["dt_referencia"] = pd.to_datetime(df[c_ref], errors="coerce") if c_ref else pd.NaT
     c_faixa = find_col(df, "FAIXA_RISCO", "faixa")
-    out["FAIXA_RISCO"] = (df[c_faixa].map(norm_faixa) if c_faixa
-                          else out["SCORE_EVASAO"].map(faixa_from_score))
+    out["FAIXA_RISCO"] = df[c_faixa].map(norm_faixa) if c_faixa else out["SCORE_EVASAO"].map(faixa_from_score)
     c_prio = find_col(df, "PRIORIDADE", "prioridade")
-    out["PRIORIDADE"] = df[c_prio] if c_prio else out["FAIXA_RISCO"].map(prioridade_from_faixa)
+    out["PRIORIDADE"] = df[c_prio].map(norm_prioridade) if c_prio else out["FAIXA_RISCO"].map(prioridade_from_faixa)
     c_acao = find_col(df, "ACAO_RECOMENDADA", "acao")
     out["ACAO_RECOMENDADA"] = df[c_acao] if c_acao else ""
     for ind in INDICATORS:
-        c = find_col(df, ind["status_col"], "STATUS_" + ind["key"])
-        out[ind["status_col"]] = df[c].map(norm_status) if c else None
+        c = find_col(df, ind["status_col"])
+        if c:
+            out[ind["status_col"]] = df[c].map(norm_status)
         for vr in ind["vars"]:
             c = find_col(df, vr["campo"])
             if c is not None:
-                out[vr["campo"]] = df[c]
-    return out.sort_values("SCORE_EVASAO", ascending=False).reset_index(drop=True)
-
-def build_long_from_wide(dw):
-    rows = []
-    for _, r in dw.iterrows():
-        for ind in INDICATORS:
-            for vr in ind["vars"]:
-                if vr["campo"] in dw.columns:
-                    rows.append(dict(cd_ra=r["cd_ra"], DIMENSAO=ind["nome"], VARIAVEL=vr["campo"],
-                                     LABEL=vr["label"], VALOR=r[vr["campo"]], PESO=vr["peso"]))
-    return pd.DataFrame(rows) if rows else None
+                out[vr["campo"]] = pd.to_numeric(df[c], errors="coerce")
+    return out
 
 def normalize_long(df):
     c_ra = find_col(df, "cd_ra", "ra")
     c_var = find_col(df, "VARIAVEL", "variavel", "feature")
     c_val = find_col(df, "VALOR", "valor", "value")
-    if c_ra is None or c_var is None or c_val is None:
+    if c_ra and c_var and c_val:
+        return pd.DataFrame({"cd_ra": df[c_ra], "VARIAVEL": df[c_var], "VALOR": df[c_val]})
+    return None
+
+def build_long_from_wide(dw):
+    keep = [v["campo"] for ind in INDICATORS for v in ind["vars"] if v["campo"] in dw.columns]
+    if not keep:
         return None
-    out = pd.DataFrame({"cd_ra": df[c_ra], "VARIAVEL": df[c_var], "VALOR": df[c_val]})
-    return out
+    return dw.melt(id_vars=["cd_ra"], value_vars=keep, var_name="VARIAVEL", value_name="VALOR")
 
-def load_data(uploaded):
-    """Returns (df_wide, df_long, source_label)."""
-    src, sheets = None, None
-    if uploaded is not None:
-        sheets = pd.read_excel(uploaded, sheet_name=None)
-        src = f"arquivo enviado: {uploaded.name}"
-    else:
-        try:
-            sheets = pd.read_excel(DEFAULT_FILE, sheet_name=None)
-            src = f"arquivo local: {DEFAULT_FILE}"
-        except FileNotFoundError:
-            dw, dl = make_synthetic()
-            return dw, dl, "dados sintéticos (demonstração)"
+@st.cache_data(show_spinner=False)
+def read_sheets(data: bytes):
+    return pd.read_excel(io.BytesIO(data), sheet_name=None)
 
-    wide, long = None, None
-    for _, sheet in sheets.items():
+@st.cache_data(show_spinner=True)
+def prepare(data: bytes, latest_only: bool):
+    sheets = read_sheets(data)
+    wide = long = None
+    for _, sh in sheets.items():
         if wide is None:
-            wide = normalize_wide(sheet)
+            wide = normalize_wide(sh)
         if long is None:
-            long = normalize_long(sheet)
+            long = normalize_long(sh)
     if wide is None:
-        dw, dl = make_synthetic()
-        return dw, dl, "dados sintéticos (arquivo sem colunas reconhecidas)"
+        return None, None
+    if latest_only and wide["dt_referencia"].notna().any():
+        wide = wide.sort_values("dt_referencia").drop_duplicates("cd_ra", keep="last")
+    wide = wide.sort_values("SCORE_EVASAO", ascending=False).reset_index(drop=True)
+    wide = enrich(wide)
     if long is None:
         long = build_long_from_wide(wide)
-    return wide, long, src
+    return wide, long
+
+def load(uploaded, latest_only):
+    if uploaded is not None:
+        w, l = prepare(uploaded.getvalue(), latest_only)
+        return w, l, f"arquivo enviado: {uploaded.name}"
+    for path in DEFAULT_FILES:
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except FileNotFoundError:
+            continue
+        w, l = prepare(data, latest_only)
+        if w is not None:
+            return w, l, f"arquivo local: {path}"
+    dw = enrich(make_synthetic())
+    return dw, build_long_from_wide(dw), "dados sintéticos (demonstração)"
 
 def var_value(df_long, ra, campo, fmt):
-    if df_long is None or "VARIAVEL" not in df_long.columns:
+    if df_long is None:
         return "—"
     hit = df_long[(df_long["cd_ra"] == ra) & (df_long["VARIAVEL"] == campo)]
     if hit.empty:
         return "—"
     raw = hit.iloc[0]["VALOR"]
-    if isinstance(raw, str):
-        return raw
-    return fmt_value(fmt, raw)
+    return raw if isinstance(raw, str) else fmt_value(fmt, raw)
 
 # ------------------------------------------------------------------ CSS
 st.markdown(f"""
 <style>
   .block-container {{ padding-top: 1rem; max-width: 1180px; }}
-  .rv-hdr {{ background:{NAVY}; border-radius:12px; padding:16px 20px; display:flex;
-             align-items:center; gap:14px; margin-bottom:6px; }}
+  .rv-hdr {{ background:{NAVY}; border-radius:12px; padding:16px 20px; display:flex; align-items:center; gap:14px; margin-bottom:6px; }}
   .rv-hdr h1 {{ color:#fff; font-size:19px; margin:0; }}
   .rv-hdr p  {{ color:#ffffff99; font-size:12.5px; margin:2px 0 0; }}
-  .rv-note {{ background:#FFF4E2; color:#8A5A00; font-size:12.5px;
-              padding:7px 14px; border-radius:8px; border:1px solid #F0D9AE; margin-bottom:14px; }}
+  .rv-note {{ background:#FFF4E2; color:#8A5A00; font-size:12.5px; padding:7px 14px; border-radius:8px; border:1px solid #F0D9AE; margin-bottom:14px; }}
   .rv-bar {{ height:9px; background:#EDF1F5; border-radius:6px; overflow:hidden; }}
   .rv-bar > span {{ display:block; height:100%; border-radius:6px; }}
   .chip {{ display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }}
@@ -274,7 +312,9 @@ st.markdown(f"""
 # ------------------------------------------------------------------ sidebar
 st.sidebar.markdown("### Fonte de dados")
 uploaded = st.sidebar.file_uploader("Enviar planilha escorada (.xlsx)", type=["xlsx"])
-df_wide, df_long, source = load_data(uploaded)
+latest_only = st.sidebar.checkbox("Usar última referência por aluno", value=True,
+                                  help="Mantém apenas a foto mais recente de cada aluno (visão operacional atual).")
+df_wide, df_long, source = load(uploaded, latest_only)
 st.sidebar.caption(f"Fonte atual: **{source}**")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Filtros (operacional)")
@@ -285,16 +325,13 @@ top20_only = st.sidebar.checkbox("Somente Top 20%")
 # ------------------------------------------------------------------ header
 st.markdown(f"""
 <div class="rv-hdr">
-  <div style="width:34px;height:34px;border-radius:8px;background:#ffffff1a;
-       display:flex;align-items:center;justify-content:center;font-size:18px;">🎓</div>
-  <div><h1>Radar de Evasão · SENAI-AL</h1>
-  <p>Modelo V15.2 · HistGradientBoosting · score 0–100</p></div>
+  <div style="width:34px;height:34px;border-radius:8px;background:#ffffff1a;display:flex;align-items:center;justify-content:center;font-size:18px;">🎓</div>
+  <div><h1>Radar de Evasão · SENAI-AL</h1><p>Modelo V15.2 · HistGradientBoosting · score 0–100</p></div>
 </div>
 """, unsafe_allow_html=True)
 if "sintétic" in source:
-    st.markdown('<div class="rv-note">Protótipo de demonstração — dados sintéticos no schema da V15.2. '
-                'Envie sua planilha escorada na barra lateral para ver com os dados reais.</div>',
-                unsafe_allow_html=True)
+    st.markdown('<div class="rv-note">Protótipo de demonstração — dados sintéticos. '
+                'Envie sua planilha escorada na barra lateral para ver com os dados reais.</div>', unsafe_allow_html=True)
 
 total = len(df_wide)
 top10_n = max(1, round(total * 0.10))
@@ -306,36 +343,32 @@ tab_exec, tab_op = st.tabs(["📊 Visão executiva", "👥 Operacional"])
 with tab_exec:
     altos = int((df_wide["SCORE_EVASAO"] >= 60).sum())
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Alunos monitorados", total)
-    c2.metric("Em risco Alto+", altos, f"{round(altos/total*100)}% do total")
-    c3.metric("Top 10% — foco imediato", top10_n)
+    c1.metric("Alunos monitorados", f"{total:,}".replace(",", "."))
+    c2.metric("Em risco Alto+", f"{altos:,}".replace(",", "."), f"{round(altos / total * 100)}% do total")
+    c3.metric("Top 10% — foco imediato", f"{top10_n:,}".replace(",", "."))
     c4.metric("Score médio", f"{df_wide['SCORE_EVASAO'].mean():.1f}")
+    if df_wide["dt_referencia"].notna().any():
+        st.caption(f"Referência mais recente na base: {pd.to_datetime(df_wide['dt_referencia']).max().strftime('%d/%m/%Y')}")
 
     g1, g2 = st.columns([1.15, 1])
     with g1:
         st.markdown("**Distribuição por faixa de risco**")
-        dist = (df_wide["FAIXA_RISCO"].value_counts()
-                .reindex(FAIXA_ORDER).fillna(0).reset_index())
+        dist = df_wide["FAIXA_RISCO"].value_counts().reindex(FAIXA_ORDER).fillna(0).reset_index()
         dist.columns = ["faixa", "alunos"]
         chart = (alt.Chart(dist).mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5)
-                 .encode(
-                     x=alt.X("faixa:N", sort=FAIXA_ORDER, title=None,
-                             axis=alt.Axis(labelAngle=0, labelFontSize=11)),
-                     y=alt.Y("alunos:Q", title=None),
-                     color=alt.Color("faixa:N", scale=alt.Scale(domain=FAIXA_ORDER,
-                             range=[FAIXA_COLOR[f] for f in FAIXA_ORDER]), legend=None),
-                     tooltip=["faixa", "alunos"])
-                 .properties(height=250))
+                 .encode(x=alt.X("faixa:N", sort=FAIXA_ORDER, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+                         y=alt.Y("alunos:Q", title=None),
+                         color=alt.Color("faixa:N", scale=alt.Scale(domain=FAIXA_ORDER, range=[FAIXA_COLOR[f] for f in FAIXA_ORDER]), legend=None),
+                         tooltip=["faixa", "alunos"]).properties(height=250))
         st.altair_chart(chart, use_container_width=True)
     with g2:
         st.markdown("**Top 10% mais críticos**")
         top = df_wide.head(top10_n)[["cd_ra", "SCORE_EVASAO", "FAIXA_RISCO", "PRIORIDADE"]].copy()
         top.columns = ["RA", "Score", "Faixa", "Prioridade"]
-        st.dataframe(
-            top.style.format({"Score": "{:.0f}"})
-               .apply(lambda col: [f"color:{FAIXA_COLOR.get(v,'')};font-weight:700"
-                                   for v in top["Faixa"]] if col.name == "Faixa" else ["" for _ in col], axis=0),
-            hide_index=True, use_container_width=True, height=250)
+        st.dataframe(top.style.format({"Score": "{:.0f}"})
+                     .apply(lambda col: [f"color:{FAIXA_COLOR.get(v, '')};font-weight:700" for v in top["Faixa"]]
+                            if col.name == "Faixa" else ["" for _ in col], axis=0),
+                     hide_index=True, use_container_width=True, height=250)
 
 # ------------------------------------------------------------------ operational
 with tab_op:
@@ -348,20 +381,16 @@ with tab_op:
         view = view[view["cd_ra"].astype(str).str.contains(q.strip())]
 
     left, right = st.columns([1, 1.05])
-
     with left:
-        st.markdown(f"**{len(view)} aluno(s)** — ordenados por score")
+        st.markdown(f"**{len(view):,}".replace(",", ".") + " aluno(s)** — ordenados por score")
         show = view[["cd_ra", "SCORE_EVASAO", "FAIXA_RISCO", "PRIORIDADE"]].copy()
         show.columns = ["RA", "Score", "Faixa", "Prioridade"]
-        st.dataframe(
-            show.style.format({"Score": "{:.0f}"})
-                .apply(lambda col: [f"background-color:{FAIXA_COLOR.get(v,'')}22;color:{FAIXA_COLOR.get(v,'')};font-weight:700"
-                                    for v in show["Faixa"]] if col.name == "Faixa" else ["" for _ in col], axis=0),
-            hide_index=True, use_container_width=True, height=430)
-
+        st.dataframe(show.style.format({"Score": "{:.0f}"})
+                     .apply(lambda col: [f"background-color:{FAIXA_COLOR.get(v, '')}22;color:{FAIXA_COLOR.get(v, '')};font-weight:700" for v in show["Faixa"]]
+                            if col.name == "Faixa" else ["" for _ in col], axis=0),
+                     hide_index=True, use_container_width=True, height=430)
         options = view["cd_ra"].tolist()
-        sel_ra = st.selectbox("Abrir aluno (RA)", options,
-                              index=0 if options else None,
+        sel_ra = st.selectbox("Abrir aluno (RA)", options, index=0 if options else None,
                               format_func=lambda r: f"RA {r}") if options else None
 
     with right:
@@ -369,45 +398,38 @@ with tab_op:
             st.info("Nenhum aluno no filtro atual.")
         else:
             s = df_wide[df_wide["cd_ra"] == sel_ra].iloc[0]
-            faixa = s["FAIXA_RISCO"]
-            fc = FAIXA_COLOR.get(faixa, NAVY)
+            faixa = s["FAIXA_RISCO"]; fc = FAIXA_COLOR.get(faixa, NAVY)
+            ref = pd.to_datetime(s["dt_referencia"]).strftime("%d/%m/%Y") if pd.notna(s["dt_referencia"]) else "—"
             st.markdown(
-                f"<div style='color:{MUTE};font-size:12px;font-weight:600'>RA {sel_ra} · ref. {s['dt_referencia']}</div>"
+                f"<div style='color:{MUTE};font-size:12px;font-weight:600'>RA {sel_ra} · ref. {ref}</div>"
                 f"<div style='display:flex;align-items:baseline;gap:12px;margin:2px 0 6px'>"
                 f"<span style='font-size:44px;font-weight:800;color:{fc};line-height:1'>{s['SCORE_EVASAO']:.0f}</span>"
                 f"<span style='font-size:12.5px;color:{MUTE}'>score de risco (0–100)</span></div>"
                 f"<span class='chip' style='background:{fc};color:#fff'>{faixa}</span> "
                 f"<span class='chip' style='background:{NAVY}18;color:{NAVY}'>{s['PRIORIDADE']}</span>",
                 unsafe_allow_html=True)
+            st.markdown(f"<div style='color:{MUTE};font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin:14px 0 6px'>Por que este aluno está neste nível</div>", unsafe_allow_html=True)
 
-            st.markdown(f"<div style='color:{MUTE};font-size:12px;font-weight:700;"
-                        f"text-transform:uppercase;letter-spacing:.4px;margin:14px 0 6px'>"
-                        f"Por que este aluno está neste nível</div>", unsafe_allow_html=True)
-
-            worst_key, worst_lvl = None, -1
             for ind in INDICATORS:
-                stv = s.get(ind["status_col"])
-                status = norm_status(stv) if isinstance(stv, str) else "Atenção"
-                lvl = STATUS_LEVEL[status]
-                if lvl > worst_lvl:
-                    worst_lvl, worst_key = lvl, ind["key"]
-                color = STATUS_COLOR[status]
-                with st.expander(f"{ind['nome']}  ·  peso {ind['peso']:.2f}%  —  {status}".replace(".", ",", 1)):
-                    st.markdown(f"<div class='rv-bar'><span style='width:{lvl}%;background:{color}'></span></div>",
-                                unsafe_allow_html=True)
-                    rows = [{"O que é observado": vr["label"],
-                             "Valor": var_value(df_long, sel_ra, vr["campo"], vr["fmt"]),
+                risk = float(s.get("RISK_" + ind["key"], 0.5))
+                status = status_from_risk(risk); color = STATUS_COLOR[status]
+                peso = f"{ind['peso']:.2f}".replace(".", ",")
+                with st.expander(f"{ind['nome']}  ·  peso {peso}%  —  {status}"):
+                    st.markdown(f"<div class='rv-bar'><span style='width:{round(risk * 100)}%;background:{color}'></span></div>", unsafe_allow_html=True)
+                    rows = [{"O que é observado": vr["label"], "Valor": var_value(df_long, sel_ra, vr["campo"], vr["fmt"]),
                              "Campo": vr["campo"], "Peso": vr["peso"]} for vr in ind["vars"]]
                     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-            acao = s.get("ACAO_RECOMENDADA") or ACAO.get(worst_key, "")
+            acao = s.get("ACAO_RECOMENDADA")
+            if not isinstance(acao, str) or not acao.strip():
+                acao = ACAO.get(s.get("_worst_key", "financeiro"), "")
             st.markdown(
-                f"<div style='display:flex;gap:10px;background:{NAVY}0D;border:1px solid {NAVY}22;"
-                f"border-radius:10px;padding:12px 14px;margin-top:10px'>"
+                f"<div style='display:flex;gap:10px;background:{NAVY}0D;border:1px solid {NAVY}22;border-radius:10px;padding:12px 14px;margin-top:10px'>"
                 f"<div style='font-size:18px'>⚠️</div><div>"
                 f"<div style='font-weight:700;color:{NAVY};font-size:13px'>Ação recomendada</div>"
                 f"<div style='font-size:13px;color:{INK};margin-top:2px'>{acao}</div></div></div>",
                 unsafe_allow_html=True)
 
-st.caption("MVP para demonstração · as métricas do modelo (ROC AUC 0,91 · alcance 75% no Top 20%) "
-           "referem-se à validação temporal da V15.2. O score prioriza a atenção; não é decisão automática.")
+st.caption("MVP para demonstração. O score (0–100) vem do modelo V15.2; o status por indicador é uma leitura "
+           "populacional das variáveis daquela dimensão. Prioriza a atenção — não é decisão automática. "
+           "Métricas do modelo: ROC AUC 0,91 · alcance de 75% no Top 20% (validação temporal).")

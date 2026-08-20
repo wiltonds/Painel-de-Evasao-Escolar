@@ -18,7 +18,7 @@ import altair as alt
 import streamlit as st
 
 # ------------------------------------------------------------------ config
-st.set_page_config(page_title="Painel de Evasão · SENAI-AL", layout="wide", page_icon="🎓")
+st.set_page_config(page_title="Painel de Evasão · SESI-AL", layout="wide", page_icon="🎓")
 
 NAVY, BLUE, INK, MUTE, LINE, PANEL = "#0F3D5C", "#1E6091", "#20272E", "#63707C", "#DCE4EC", "#F4F7FA"
 FAIXA_ORDER = ["Muito baixo", "Baixo", "Médio", "Alto", "Muito alto"]
@@ -326,7 +326,7 @@ top20_only = st.sidebar.checkbox("Somente Top 20%")
 st.markdown(f"""
 <div class="rv-hdr">
   <div style="width:34px;height:34px;border-radius:8px;background:#ffffff1a;display:flex;align-items:center;justify-content:center;font-size:18px;">🎓</div>
-  <div><h1> Painel  de Evasão · SENAI-AL</h1><p>Modelo V15.2 · HistGradientBoosting · score 0–100</p></div>
+  <div><h1> Painel  de Evasão · SESI-AL</h1><p>Modelo V15.2 · HistGradientBoosting · score 0–100</p></div>
 </div>
 """, unsafe_allow_html=True)
 if "sintétic" in source:

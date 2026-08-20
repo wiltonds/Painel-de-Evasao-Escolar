@@ -1,5 +1,5 @@
 """
-Radar de Evasão · SENAI-AL — MVP (Streamlit)
+Painel de Evasão · SENAI-AL — MVP (Streamlit)
 Lê a saída escorada do modelo V15.2 (aba SCORE_ALUNOS: score + faixa + prioridade +
 as 20 variáveis por aluno × referência) e apresenta uma visão executiva e uma
 operacional com drill-down por indicador → variável.
@@ -18,7 +18,7 @@ import altair as alt
 import streamlit as st
 
 # ------------------------------------------------------------------ config
-st.set_page_config(page_title="Radar de Evasão · SENAI-AL", layout="wide", page_icon="🎓")
+st.set_page_config(page_title="Painel de Evasão · SENAI-AL", layout="wide", page_icon="🎓")
 
 NAVY, BLUE, INK, MUTE, LINE, PANEL = "#0F3D5C", "#1E6091", "#20272E", "#63707C", "#DCE4EC", "#F4F7FA"
 FAIXA_ORDER = ["Muito baixo", "Baixo", "Médio", "Alto", "Muito alto"]

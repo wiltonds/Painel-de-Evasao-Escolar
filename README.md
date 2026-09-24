@@ -4,6 +4,9 @@
 
 Sistema de **Learning Analytics + Machine Learning** desenvolvido para identificar estudantes com maior risco de evasão e transformar a predição em uma visão operacional para acompanhamento.
 
+![Portfolio architecture](./docs/portfolio-hero.svg)
+
+
 O projeto utiliza o modelo **V15.2 — HistGradientBoosting** para gerar um score de risco de 0 a 100 e organiza os principais fatores associados ao risco em dimensões como desempenho acadêmico, permanência, situação financeira, bolsa/desconto, frequência e comportamento.
 
 > **Objetivo:** apoiar a identificação antecipada de estudantes que podem precisar de acompanhamento, transformando dados educacionais em informação acionável para equipes pedagógicas e de gestão.
@@ -148,7 +151,7 @@ Essas métricas descrevem a validação do modelo e não devem ser interpretadas
 ## Estrutura do projeto
 
 ```text
-MVP-Radar-de-Evas-o/
+Painel-de-Evasao-Escolar/
 │
 ├── app.py
 ├── dados/

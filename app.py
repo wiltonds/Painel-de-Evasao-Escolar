@@ -1,5 +1,5 @@
 """ 
-Painel de Evasão · SENAI-AL — MVP (Streamlit)
+Painel Evasão Escolar · ML — Modelo preditivo (Streamlit)
 Lê a saída escorada do modelo V15.2 (aba SCORE_ALUNOS: score + faixa + prioridade +
 as 20 variáveis por aluno × referência) e apresenta uma visão executiva e uma
 operacional com drill-down por indicador → variável.
@@ -18,7 +18,7 @@ import altair as alt
 import streamlit as st
 
 # ------------------------------------------------------------------ config
-st.set_page_config(page_title="Painel de Evasão · SESI-AL", layout="wide", page_icon="🎓")
+st.set_page_config(page_title="Painel Evasão Escolar · ML | Modelo preditivo", layout="wide", page_icon="🎓")
 
 NAVY, BLUE, INK, MUTE, LINE, PANEL = "#0F3D5C", "#1E6091", "#20272E", "#63707C", "#DCE4EC", "#F4F7FA"
 FAIXA_ORDER = ["Muito baixo", "Baixo", "Médio", "Alto", "Muito alto"]
@@ -326,7 +326,7 @@ top20_only = st.sidebar.checkbox("Somente Top 20%")
 st.markdown(f"""
 <div class="rv-hdr">
   <div style="width:34px;height:34px;border-radius:8px;background:#ffffff1a;display:flex;align-items:center;justify-content:center;font-size:18px;">🎓</div>
-  <div><h1> Painel  de Evasão · SESI-AL</h1><p>Modelo V15.2 · HistGradientBoosting · score 0–100</p></div>
+  <div><h1> Painel Evasão Escolar · ML</h1><p>Modelo preditivo V15.2 · HistGradientBoosting · score 0–100</p></div>
 </div>
 """, unsafe_allow_html=True)
 if "sintétic" in source:
@@ -430,6 +430,6 @@ with tab_op:
                 f"<div style='font-size:13px;color:{INK};margin-top:2px'>{acao}</div></div></div>",
                 unsafe_allow_html=True)
 
-st.caption("MVP para demonstração. O score (0–100) vem do modelo V15.2; o status por indicador é uma leitura "
+st.caption("Painel Evasão Escolar · ML — modelo preditivo para demonstração. O score (0–100) vem do modelo V15.2; o status por indicador é uma leitura "
            "populacional das variáveis daquela dimensão. Prioriza a atenção — não é decisão automática. "
            "Métricas do modelo: ROC AUC 0,91 · alcance de 75% no Top 20% (validação temporal).")
